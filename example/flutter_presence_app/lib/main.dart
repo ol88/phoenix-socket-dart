@@ -28,7 +28,7 @@ class MyApp extends StatelessWidget {
 }
 
 class MyHomePage extends StatefulWidget {
-  MyHomePage({Key key, this.title}) : super(key: key);
+  MyHomePage({Key? key, required this.title}) : super(key: key);
 
   final String title;
 
@@ -39,9 +39,9 @@ class MyHomePage extends StatefulWidget {
 class _MyHomePageState extends State<MyHomePage> {
   final _socketOptions =
       PhoenixSocketOptions(params: {'user_id': 'example user 1'});
-  PhoenixSocket _socket;
-  PhoenixChannel _channel;
-  PhoenixPresence _presence;
+  late PhoenixSocket _socket;
+  late PhoenixChannel _channel;
+  late PhoenixPresence _presence;
   var _responses = [];
 
   @override
@@ -52,14 +52,17 @@ class _MyHomePageState extends State<MyHomePage> {
     // android\app\src\main\AndroidManifest.xml:
     //   ...<application
     //       ...
-		//       android:usesCleartextTraffic="true">
+    //       android:usesCleartextTraffic="true">
     //       <activity...
     _socket = PhoenixSocket('ws://localhost:4001/socket/websocket',
         socketOptions: _socketOptions);
     _channel = _socket.addChannel(topic: 'presence:lobby');
     _presence = PhoenixPresence(channel: _channel);
 
-    _socket.closeStream.listen((event) {});
+    _socket.closeStream.listen((event) {
+      // Temporary fix until https://github.com/braverhealth/phoenix-socket-dart/issues/34 is resolved.
+      _socket.close();
+    });
     _socket.openStream.listen((event) {
       _channel.join();
     });
@@ -80,32 +83,60 @@ class _MyHomePageState extends State<MyHomePage> {
 
   @override
   Widget build(BuildContext context) {
-    print('state:');
-    print(_presence?.state);
-
     _responses =
-        _presence?.list(_presence?.state, (String id, Presence presence) {
+        _presence.list(_presence.state, (String id, Presence presence) {
       final metas = presence.metas;
       var count = metas.length;
-      final response = '${id} (count: ${count})';
+
+      // Optional step, cast [PhoenixPresenceMeta] to [MyCustomPhoenixPresenceMeta]
+      // for ease of use with custom fields.
+      final myMetas = metas.map((m) => MyCustomPhoenixPresenceMeta(m)).toList();
+
+      // Sort latest connection to the end of the metas list.
+      myMetas.sort((a, b) => a.onlineAt.compareTo(b.onlineAt));
+      final latestOnline = myMetas.last.onlineAt;
+
+      final response =
+          '$id (count: $count, latest online at: ${latestOnline.hour}:${latestOnline.minute}:${latestOnline.second})';
       return response;
     });
-    if (_responses != null) {
-      return Scaffold(
-        appBar: AppBar(title: const Text('Presence Example')),
-        body: Container(
-          child: ListView.builder(
-            itemCount: _responses.length,
-            itemBuilder: (BuildContext context, int index) {
-              return ListTile(
-                title: Text(_responses[index]),
-              );
-            },
-          ),
+    return Scaffold(
+      appBar: AppBar(title: const Text('Presence Example')),
+      body: Container(
+        child: ListView.builder(
+          itemCount: _responses.length,
+          itemBuilder: (BuildContext context, int index) {
+            return ListTile(
+              title: Text(_responses[index]),
+            );
+          },
         ),
-      );
-    } else {
-      return Container();
-    }
+      ),
+    );
+  }
+}
+
+/// Optionally, you can extends the PhoenixPresenceMeta class with your custom meta fields
+/// so they are easily accessible from your code.
+/// Below is an example with a custom [online_at] field in the metas from the server which indicates
+/// the connection time in millisecondsSinceEpoch.
+class MyCustomPhoenixPresenceMeta extends PhoenixPresenceMeta {
+  /// The time at which the [Presence] event happened in the local time zone.
+  DateTime get onlineAt => _onlineAt;
+
+  MyCustomPhoenixPresenceMeta._fromJson(Map<String, dynamic> meta)
+      : _onlineAt =
+            DateTime.fromMillisecondsSinceEpoch(int.parse(meta['online_at'])),
+        super.fromJson(meta);
+
+  factory MyCustomPhoenixPresenceMeta(PhoenixPresenceMeta meta) {
+    return MyCustomPhoenixPresenceMeta._fromJson(meta.data);
+  }
+
+  final DateTime _onlineAt;
+
+  @override
+  MyCustomPhoenixPresenceMeta clone() {
+    return MyCustomPhoenixPresenceMeta(super.clone());
   }
 }
